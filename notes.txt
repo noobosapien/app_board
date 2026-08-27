@@ -1,0 +1,823 @@
+*** Notes ***
+--------------------------------------------------------------------------------------------------------------
+Day 1
+--------------------------------------------------------------------------------------------------------------
+
+From the vendor shown example https://github.com/WeActStudio/WeActStudio.EpaperModule/blob/master/Example/EpaperModuleTest_Arduino_ESP32/EpaperModuleTest_Arduino_ESP32.ino. 
+The driver chip used is SSD1680.
+
+The data sheet for that eink driver is https://www.e-paper-display.com/SSD1680%20Specificationffb0.pdf?method=picker&flag=all&id=ea90f3d3-ed7d-48b1-98f7-b82aaba50c93&fileId=960&v=1.zip
+
+176 x 296 pixels, 1 pixel = 1 bit.
+Has an embedded booster
+Colors: R/B/W
+There is an on chip RAM. Therefore the frame buffer can be sent straight using SPI.
+5 programmable LUTs
+Each LUT: 48 phases, 4 phases/group, which is 12 groups.
+Embedded OTP to store waveform settings and parameters: 36 sets.
+There are many pins in the die, but 8 exposed pins.
+SPI + Busy + Res + D/C + Vcc + Gnd
+
+Supports 3 or 4 wire SPI. This is most likely 4 wire SPI due to D/C line. There should be a connection between BS1 and Vss.
+
+For a command SCL should be a rising edge. SDA is the bit. D/C should be low. C/S should be low.
+For a data SCL should be a rising edge. SDA is the bit. D/C should be high. C/S should be low.
+
+The order of recieving is D7, D6, D5, ..., D0.
+For read operations send the command as usual and the line of SDA will have the read data from the controller from the next clock cycle.
+VGH, VGL, VSH1, VSH2, VSL and VCOM needs an external circuit to power up poperly. This is probably already done in the board.
+
+1 set of RAM 176 x 296 bits for Mono B/W
+1 set of RAM 176 x 296 bits for Mono Red
+
+3 Colors are used in this display so:
+When the data bit in the Red RAM is 1 the color is always Red.
+When Red is 1 and B/W is 0, LUT 2 is used to drive Red.
+When Red is 1 and B/W is 1, LUT 3 is used to drive Red it is the same as LUT 2.
+
+When Red is 0, B/W is 0 LUT 0 is used to drive the color Black.
+When Red is 0, B/W is 1 LUT 1 is used to drive the color White.
+
+Section 6.6 for LUT programming.
+
+--------------------------------------------------------------------------------------------------------------
+Day 2
+--------------------------------------------------------------------------------------------------------------
+
+For the programmable waveform of Source and VCOM, there are 12 groups with 4 phases each, with 2 state repeats.
+In total there are 48 phases. In each phase the length can be set for a number (TP[nX]) 0 - 255.
+Each group can be repeated with repeat counting number SR[nAB]/SR[nCD] from 1 to 256.
+Each AB/CD phases can be repeated with state repeat counting numbers (SR[NAB]/SR[nCD]) from 1 to 256.
+For the voltage, there are four levels for source voltage (VSS, VSH1, VSH2, VSL)
+For VCOM there are 3 levels (DCVCOM, VSH1 + DCVCOM, VSL + DCVCOM)
+
+TP[nX] is the phase length set by the number of frames n is the group number 0-11, X is the phase number A-D
+when TP[nX] = 0, the phase is skipped. When TP[nX] = 1, the phase is 1 frame, and so on. Max 255 frames.
+
+RP[n] is the repeat counting number for the group.
+The range is from 0 to 255
+n represents the group number 0 to 11
+RP[n] = 0 indicates that the repeat times = 1, RP[n] = 1 indicates repeat time is 2. Max = 256 repeats.
+
+SR[nAB] and SR[nCD] represent the state repeat counting number for phase A & B and phase C & D.
+Range is 0 - 255
+n is the group number from 0 to 11
+SR[nXY] = 0 indicates the repeat times = 1, SR[nXY] = 1 indicates the repeat times = 2. Max is 256
+
+VS[nX-LUTm] represents Source and VCOM voltage level which is used in each phase.
+n represents the group number from 0 to 11.
+m represents the LUT number from 0 to 4.
+
+FR[n] represents the frame rate of group n.
+The range of FR[n] is from 0 to 7.
+n represents the group number from 0 to 11.
+
+XON[nAB] and XON[nCD], indicates the gate scan selection.
+n represents the group number from 0 to 11.
+XON[nXY] = 0 indicates normal gate scan in Phase[nX] & Phase[nY]
+XON[nXY] = 1 indicates all gate on, that gate keeps high until the phase for normal gate scan, in Phase[nX] & Phase[nY]
+
+VS[nX-LUTm], TP[nX], RP[n], SR[nXY], FR[n] and XON[nXY] are used to define the driving waveform.
+Questions: does it have to be uploaded after every frame? is it different for full and partial refreshes? 
+
+There are 5 LUTs, in the SSD1680, there are 159 bytes in the settings to store LUT0, LUT1, LUT2, LUT3 and LUT4, gate voltage,
+source voltage and frame rate. LUT for a particular temperature range can be done in the OTP or the MCU.
+
+Look into GxEPD source.
+https://github.com/ZinggJM/GxEPD2/blob/master/src/epd/GxEPD2_213.cpp#L359
+
+LUT is mentioned in _Init_Full and _Init_Part
+Come back to this later.
+
+There is a temperature sensor in SSD1680.
+The internal temperature sensor has an accuracy +-2 deg C from -25 to 50.
+
+Do not worry about OTP for this project
+
+Init sequence:
+From the source of GxEPD
+void GxEPD2_213_Z98c::_InitDisplay()
+{
+  if (_hibernating) _reset();
+  delay(10); // 10ms according to specs
+  _writeCommand(0x12);  //SWRESET
+  delay(10); // 10ms according to specs
+  _writeCommand(0x01); //Driver output control
+  _writeData(0xF9);
+  _writeData(0x00);
+  _writeData(0x00);
+  _writeCommand(0x11); //data entry mode
+  _writeData(0x03);
+  _writeCommand(0x3C); //BorderWavefrom
+  _writeData(0x05);
+  _writeCommand(0x18); //Read built-in temperature sensor
+  _writeData(0x80);
+  _writeCommand(0x21); //  Display update control
+  _writeData(0x00);
+  _writeData(0x80);
+  _setPartialRamArea(0, 0, WIDTH, HEIGHT);
+}
+
+Reset:
+
+void GxEPD2_EPD::_reset()
+{
+  if (_rst >= 0)
+  {
+    if (_pulldown_rst_mode)
+    {
+      digitalWrite(_rst, LOW);
+      pinMode(_rst, OUTPUT);
+      digitalWrite(_rst, LOW);
+      delay(_reset_duration);
+      pinMode(_rst, INPUT_PULLUP);
+      delay(_reset_duration > 10 ? _reset_duration : 10);
+    }
+    else
+    {
+      digitalWrite(_rst, HIGH); // NEEDED for Waveshare "clever" reset circuit, power controller before reset pulse, preset (less glitch for any analyzer)
+      pinMode(_rst, OUTPUT);
+      digitalWrite(_rst, HIGH); // NEEDED for Waveshare "clever" reset circuit, power controller before reset pulse, set (needed e.g. for RP2040)
+      delay(10); // NEEDED for Waveshare "clever" reset circuit, at least delay(2);
+      digitalWrite(_rst, LOW);
+      delay(_reset_duration);
+      digitalWrite(_rst, HIGH);
+      delay(_reset_duration > 10 ? _reset_duration : 10);
+    }
+    _hibernating = false;
+  }
+}
+
+In the docs it says rst is active low so it must be _pulldown_rst_mode = true;
+
+--------------------------------------------------------------------------------------------------------------
+Day 3
+--------------------------------------------------------------------------------------------------------------
+
+Look into lines   if (_hibernating) _reset(); and _setPartialRamArea(0, 0, WIDTH, HEIGHT); later.
+First of all get full refresh working.
+In the source the LUT for full refresh is as follows
+
+const uint8_t GxEPD2_213::LUTDefault_full[] PROGMEM =
+{
+  0x32,  // command
+  0x22, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x1E, 0x01, 0x00, 0x00, 0x00, 0x00
+};
+
+From the command table 0x32 is Write LUT register.
+There are 29 bytes in this. Only some of VCOM and source set?
+Looks like the rest of the bytes get defaulted to 0x00.
+
+The function to inititate full is
+
+void GxEPD2_213::_Init_Full()
+{
+  _InitDisplay();
+  _writeCommandDataPGM(LUTDefault_full, sizeof(LUTDefault_full));
+  _PowerOn();
+  _using_partial_mode = false;
+}
+
+_InitDisplay(); is already looked at.
+_writeCommandDataPGM is in src/GxEPD2_EPD.h
+
+void GxEPD2_EPD::_writeCommandDataPGM(const uint8_t* pCommandData, uint8_t datalen)
+{
+  _pSPIx->beginTransaction(_spi_settings);
+  if (_dc >= 0) digitalWrite(_dc, LOW);
+  if (_cs >= 0) digitalWrite(_cs, LOW);
+  _pSPIx->transfer(pgm_read_byte(&*pCommandData++));
+  if (_dc >= 0) digitalWrite(_dc, HIGH);
+  for (uint8_t i = 0; i < datalen - 1; i++)  // sub the command
+  {
+    _pSPIx->transfer(pgm_read_byte(&*pCommandData++));
+  }
+  if (_cs >= 0) digitalWrite(_cs, HIGH);
+  _pSPIx->endTransaction();
+}
+
+Procedure:
+If DC and CS are valid make them LOW.
+Transfer from SPI the first byte and increment the address.
+If DC is valid make it HIGH for data transfer.
+For all the data in length, transfer the bytes.
+Make chip select HIGH so it is not used anymore.
+
+The way it is designed, the first byte is always the command.
+
+Power on mechanism.
+void GxEPD2_213::_PowerOn()
+{
+  if (!_power_is_on)
+  {
+    _writeCommand(0x22);
+    _writeData(0xc0);
+    _writeCommand(0x20);
+    _waitWhileBusy("_PowerOn", power_on_time);
+  }
+  _power_is_on = true;
+}
+
+If _power_is_on is not set to true:
+Send the command 0x22
+Send data 0xc0
+Send command 0x20
+Wait for busy pin.
+Set _power_is_on to true.
+
+Write command mechanism:
+
+void GxEPD2_EPD::_writeCommand(uint8_t c)
+{
+  _pSPIx->beginTransaction(_spi_settings);
+  if (_dc >= 0) digitalWrite(_dc, LOW);
+  if (_cs >= 0) digitalWrite(_cs, LOW);
+  _pSPIx->transfer(c);
+  if (_cs >= 0) digitalWrite(_cs, HIGH);
+  if (_dc >= 0) digitalWrite(_dc, HIGH);
+  _pSPIx->endTransaction();
+}
+
+DC & CS LOW.
+transfer the byte.
+DC & CS HIGH.
+
+Write data mechanism:
+
+void GxEPD2_EPD::_writeData(uint8_t d)
+{
+  _pSPIx->beginTransaction(_spi_settings);
+  if (_cs >= 0) digitalWrite(_cs, LOW);
+  _pSPIx->transfer(d);
+  if (_cs >= 0) digitalWrite(_cs, HIGH);
+  _pSPIx->endTransaction();
+}
+
+CS LOW.
+transfer the byte.
+CS HIGH.
+DC is HIGH throughout.
+
+Waiting for the busy pin:
+
+void GxEPD2_EPD::_waitWhileBusy(const char* comment, uint16_t busy_time)
+{
+  if (_busy >= 0)
+  {
+    delay(1); // add some margin to become active
+    unsigned long start = micros();
+    while (1)
+    {
+      if (digitalRead(_busy) != _busy_level) break;
+      if (_busy_callback) _busy_callback(_busy_callback_parameter);
+      else delay(1);
+      if (digitalRead(_busy) != _busy_level) break;
+      if (micros() - start > _busy_timeout)
+      {
+        Serial.println("Busy Timeout!");
+        break;
+      }
+#if defined(ESP8266) || defined(ESP32)
+      yield(); // avoid wdt
+#endif
+    }
+    if (comment)
+    {
+#if !defined(DISABLE_DIAGNOSTIC_OUTPUT)
+      if (_diag_enabled)
+      {
+        unsigned long elapsed = micros() - start;
+        Serial.print(comment);
+        Serial.print(" : ");
+        Serial.println(elapsed);
+      }
+#endif
+    }
+    (void) start;
+  }
+  else delay(busy_time);
+}
+
+If busy is set:
+Delay a bit.
+Get the start time.
+
+Loop:
+If busy is not in the level: break
+Else if there is a callback function call that.
+
+etc...
+It will be easier with FreeRTOS.
+
+
+--------------------------------------------------------------------------------------------------------------
+Day 4
+--------------------------------------------------------------------------------------------------------------
+
+Turns out the dev board has wrong pins. Used the first channel of the logic analyzer to select working pins.
+Code used:
+
+void app_main(void)
+{
+
+    gpio_set_direction(SSD1680_DC, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SSD1680_RST, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SSD1680_SDA, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SSD1680_SCK, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SSD1680_CS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SSD1680_BUSY, GPIO_MODE_OUTPUT);
+    gpio_set_direction(21, GPIO_MODE_OUTPUT);
+    gpio_set_direction(5, GPIO_MODE_OUTPUT);
+    gpio_set_direction(18, GPIO_MODE_OUTPUT);
+
+    while(true){
+        gpio_set_level(18, 0);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        gpio_set_level(18, 1);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+}
+
+Only SDA, SCK and CS pins need to be changed.
+SDA will be 21
+SCK will be 18
+CS will be 5
+
+This is VSPI in ESP32.
+
+How it worked:
+If the correct pin with the correct number was selected, the output would of the logic analyzer
+be square waves with a length of 100ms. Most of the original pins were used were probably not 
+connected.
+
+Looking at the original Arduino example SPI logic. It is different from this.
+There are many startup codes missed in mine.
+Before the power on sequence.
+
+Reverse engineering the commands and data from the example.
+All 5 lines start high.
+RST goes low for 50ms
+When it is a command DC line goes low.
+When it is data DC line stays high.
+CS goes low when communication begins.
+
+Sequence:
+RST goes low for about 50ms, then it comes up.
+After about 60ms send command 0x12 which is software reset command.
+Wait 10ms.
+Send command 0x01 then data 0xf9, 0x00, 0x00
+Command 0x11 with data 0x03 - Data entry mode
+Command 0x3c with data 0x05 - Border Waveform OTP
+Command 0x18 with data 0x80 - Temperature sensor control
+Command 0x21 with data 0x00, 0x80 - Display update control
+Command 0x44 with data 0x00 - Set RAM X - Address start/end position
+Command 0x45 with data 0x00, 0x00, 0xf9, 0x00 - Set RAM Y - Address start/end position
+Command 0x4e with data 0x00 - Set RAM X address counter
+Command 0x4f with data 0x00, 0x00 - Set RAM Y address counter
+
+REPEATED LAST FEW COMMANDS:
+Command 0x44 with data 0x00, 0x0f
+Command 0x45 with data 0x00, 0x00, 0xf9, 0x00
+Command 0x4e with data 0x00
+Command 0x4f with data 0x00, 0x00
+
+Command 0x24 with data 0xff to fill the framebuffer - Write RAM (B/W)
+Command 0x26 with data 0x00 to the size of framebuffer - Write RAM (Red)
+
+POWER ON:
+Command 0x22 with data 0xf7 - Display update control
+Command 0x20 - Master activation
+
+REPEAT FROM THE BEGINNING:
+Command 0x12...
+
+Make this 1 single function and work from there.
+
+This shows noise!
+
+void app_main(void)
+{
+    spi_bus_config_t buscfg = {
+                    .mosi_io_num = SSD1680_SDA,
+                    .sclk_io_num = SSD1680_SCK,
+                    .quadwp_io_num = -1,
+                    .quadhd_io_num = -1,
+                    .max_transfer_sz = display_height * display_width * 2 + 8
+                };
+
+                ESP_ERROR_CHECK(spi_bus_initialize(VSPI_HOST, &buscfg, 1));
+
+    spi_device_interface_config_t devcfg = {
+                    .clock_speed_hz = 4 * 1000 * 1000,
+                    .mode = 0,
+                    .spics_io_num = SSD1680_CS,
+                    .queue_size = 8,
+                    .pre_cb = lcd_spi_pre_transfer_callback,
+                    .flags = SPI_DEVICE_NO_DUMMY | SPI_DEVICE_HALFDUPLEX
+                };
+
+                ESP_ERROR_CHECK(spi_bus_add_device(VSPI_HOST, &devcfg, &spi_device));
+
+                init_gpios();
+
+    buffer_size = (display_height * display_width) / 8;
+    
+    frame_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+    if (frame_buffer == NULL) {
+        ESP_LOGE("EPD", "Failed to allocate memory for frame buffer!");
+        return;
+    }
+
+    gpio_set_level(SSD1680_RST, 0);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+    gpio_set_level(SSD1680_RST, 1); 
+    vTaskDelay(60 / portTICK_PERIOD_MS);
+
+    epd_cmd(init_cmds[0].cmd, init_cmds[0].data, init_cmds[0].databytes);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    for(int i = 1; i < 10; i++){
+        epd_cmd(init_cmds[i].cmd, init_cmds[i].data, init_cmds[i].databytes);
+    }
+
+    memset(frame_buffer, 0xff, buffer_size);
+    epd_cmd(0x24, frame_buffer, buffer_size);
+    memset(frame_buffer, 0x00, buffer_size);
+    epd_cmd(0x26, frame_buffer, buffer_size);
+
+    for(int i = 0; i < 2; i++){
+        epd_cmd(power_on_cmds1[i].cmd, power_on_cmds1[i].data, power_on_cmds1[i].databytes);
+    }
+}
+
+
+--------------------------------------------------------------------------------------------------------------
+Day 5
+--------------------------------------------------------------------------------------------------------------
+
+Turns out, currently this has no effect:
+
+    memset(frame_buffer, 0xff, buffer_size);
+    epd_cmd(0x24, frame_buffer, buffer_size);
+    memset(frame_buffer, 0x00, buffer_size);
+    epd_cmd(0x26, frame_buffer, buffer_size);
+
+
+Going back to Arduino example.
+
+The most important files are:
+GxEPD2_3C.h GxEPD2_213_Z98c.h GxEPD2_213_Z98c.cpp
+
+To show the buffer the most important function is:
+
+
+void GxEPD2_213_Z98c::writeImage(const uint8_t* black, const uint8_t* color, int16_t x, int16_t y, int16_t w, int16_t h, bool invert, bool mirror_y, bool pgm)
+{
+  if (_initial_write) writeScreenBuffer(); // initial full screen buffer clean
+  delay(1); // yield() to avoid WDT on ESP8266 and ESP32
+  int16_t wb = (w + 7) / 8; // width bytes, bitmaps are padded
+  x -= x % 8; // byte boundary
+  w = wb * 8; // byte boundary
+  int16_t x1 = x < 0 ? 0 : x; // limit
+  int16_t y1 = y < 0 ? 0 : y; // limit
+  int16_t w1 = x + w < int16_t(WIDTH) ? w : int16_t(WIDTH) - x; // limit
+  int16_t h1 = y + h < int16_t(HEIGHT) ? h : int16_t(HEIGHT) - y; // limit
+  int16_t dx = x1 - x;
+  int16_t dy = y1 - y;
+  w1 -= dx;
+  h1 -= dy;
+  if ((w1 <= 0) || (h1 <= 0)) return;
+  _Init_Part();
+  _setPartialRamArea(x1, y1, w1, h1);
+  _writeCommand(0x24);
+  for (int16_t i = 0; i < h1; i++)
+  {
+    for (int16_t j = 0; j < w1 / 8; j++)
+    {
+      uint8_t data = 0xFF;
+      if (black)
+      {
+        // use wb, h of bitmap for index!
+        int16_t idx = mirror_y ? j + dx / 8 + ((h - 1 - (i + dy))) * wb : j + dx / 8 + (i + dy) * wb;
+        if (pgm)
+        {
+#if defined(__AVR) || defined(ESP8266) || defined(ESP32)
+          data = pgm_read_byte(&black[idx]);
+#else
+          data = black[idx];
+#endif
+        }
+        else
+        {
+          data = black[idx];
+        }
+        if (invert) data = ~data;
+      }
+      _writeData(data);
+    }
+  }
+  _writeCommand(0x26);
+  for (int16_t i = 0; i < h1; i++)
+  {
+    for (int16_t j = 0; j < w1 / 8; j++)
+    {
+      uint8_t data = 0xFF;
+      if (color)
+      {
+        // use wb, h of bitmap for index!
+        int16_t idx = mirror_y ? j + dx / 8 + ((h - 1 - (i + dy))) * wb : j + dx / 8 + (i + dy) * wb;
+        if (pgm)
+        {
+#if defined(__AVR) || defined(ESP8266) || defined(ESP32)
+          data = pgm_read_byte(&color[idx]);
+#else
+          data = color[idx];
+#endif
+        }
+        else
+        {
+          data = color[idx];
+        }
+        if (invert) data = ~data;
+      }
+      _writeData(~data);
+    }
+  }
+  delay(1); // yield() to avoid WDT on ESP8266 and ESP32
+}
+
+The values of display_height and display_width changed to 250 and 128
+
+This function is not present in main code.
+
+void GxEPD2_213_Z98c::_setPartialRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+  _writeCommand(0x44);
+  _writeData(x / 8);
+  _writeData((x + w - 1) / 8);
+  _writeCommand(0x45);
+  _writeData(y % 256);
+  _writeData(y / 256);
+  _writeData((y + h - 1) % 256);
+  _writeData((y + h - 1) / 256);
+  _writeCommand(0x4e);
+  _writeData(x / 8);
+  _writeCommand(0x4f);
+  _writeData(y % 256);
+  _writeData(y / 256);
+}
+
+Do this before sending 0x24 and 0x26
+
+Yes!
+
+Having this function solves it!
+
+void set_partial_ram_area(uint16_t x, uint16_t y, uint16_t width, uint16_t height){
+    epd_init_cmd_t temp = {};
+    temp.cmd = 0x44;
+    temp.data[0] = x / 8;
+    temp.data[1] = (x + width - 1)/ 8;
+    temp.databytes = 2;
+    epd_cmd(temp.cmd, temp.data, temp.databytes);
+
+    temp.cmd = 0x45;
+    temp.data[0] = y % 256;
+    temp.data[1] = y / 256;
+    temp.data[2] = (y + height - 1) % 256;
+    temp.data[3] = (y + height - 1) / 256;
+    temp.databytes = 4;
+    epd_cmd(temp.cmd, temp.data, temp.databytes);
+
+    temp.cmd = 0x4e;
+    temp.data[0] = x / 8;
+    temp.databytes = 1;
+    epd_cmd(temp.cmd, temp.data, temp.databytes);
+
+    temp.cmd = 0x4f;
+    temp.data[0] = y % 256;
+    temp.data[1] = y / 256;
+    temp.databytes = 2;
+    epd_cmd(temp.cmd, temp.data, temp.databytes);
+}
+
+Note: Power on commands should always be at the end.
+
+
+--------------------------------------------------------------------------------------------------------------
+Day 6
+--------------------------------------------------------------------------------------------------------------
+
+Creating the font from Arduino GFX library and adding functionality.
+
+The important structs are 
+
+/// Font data stored PER GLYPH
+typedef struct {
+  uint16_t bitmapOffset; ///< Pointer into GFXfont->bitmap
+  uint8_t width;         ///< Bitmap dimensions in pixels
+  uint8_t height;        ///< Bitmap dimensions in pixels
+  uint8_t xAdvance;      ///< Distance to advance cursor (x axis)
+  int8_t xOffset;        ///< X dist from cursor pos to UL corner
+  int8_t yOffset;        ///< Y dist from cursor pos to UL corner
+} GFXglyph;
+
+/// Data stored for FONT AS A WHOLE
+typedef struct {
+  uint8_t *bitmap;  ///< Glyph bitmaps, concatenated
+  GFXglyph *glyph;  ///< Glyph array
+  uint16_t first;   ///< ASCII extents (first char)
+  uint16_t last;    ///< ASCII extents (last char)
+  uint8_t yAdvance; ///< Newline distance (y axis)
+} GFXfont;
+
+In the library, for each font there is a bitmap and a set of glyphs.
+GFXfont is made from those.
+GFXfont is used in the drawChar function.
+For this I will only use 1 font with glyphs which is FreeMonoBold9pt7b
+
+Important function is 
+void Adafruit_GFX::drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, 
+uint16_t bg, uint8_t size_x, uint8_t size_y)
+{
+
+  if (!gfxFont) { // 'Classic' built-in font
+
+    if ((x >= _width) ||              // Clip right
+        (y >= _height) ||             // Clip bottom
+        ((x + 6 * size_x - 1) < 0) || // Clip left
+        ((y + 8 * size_y - 1) < 0))   // Clip top
+      return;
+
+    if (!_cp437 && (c >= 176))
+      c++; // Handle 'classic' charset behavior
+
+    startWrite();
+    for (int8_t i = 0; i < 5; i++) { // Char bitmap = 5 columns
+      uint8_t line = pgm_read_byte(&font[c * 5 + i]);
+      for (int8_t j = 0; j < 8; j++, line >>= 1) {
+        if (line & 1) {
+          if (size_x == 1 && size_y == 1)
+            writePixel(x + i, y + j, color);
+          else
+            writeFillRect(x + i * size_x, y + j * size_y, size_x, size_y,
+                          color);
+        } else if (bg != color) {
+          if (size_x == 1 && size_y == 1)
+            writePixel(x + i, y + j, bg);
+          else
+            writeFillRect(x + i * size_x, y + j * size_y, size_x, size_y, bg);
+        }
+      }
+    }
+    if (bg != color) { // If opaque, draw vertical line for last column
+      if (size_x == 1 && size_y == 1)
+        writeFastVLine(x + 5, y, 8, bg);
+      else
+        writeFillRect(x + 5 * size_x, y, size_x, 8 * size_y, bg);
+    }
+    endWrite();
+
+  } else { // Custom font
+
+    // Character is assumed previously filtered by write() to eliminate
+    // newlines, returns, non-printable characters, etc.  Calling
+    // drawChar() directly with 'bad' characters of font may cause mayhem!
+
+    c -= (uint8_t)pgm_read_byte(&gfxFont->first);
+    GFXglyph *glyph = pgm_read_glyph_ptr(gfxFont, c);
+    uint8_t *bitmap = pgm_read_bitmap_ptr(gfxFont);
+
+    uint16_t bo = pgm_read_word(&glyph->bitmapOffset);
+    uint8_t w = pgm_read_byte(&glyph->width), h = pgm_read_byte(&glyph->height);
+    int8_t xo = pgm_read_byte(&glyph->xOffset),
+           yo = pgm_read_byte(&glyph->yOffset);
+    uint8_t xx, yy, bits = 0, bit = 0;
+    int16_t xo16 = 0, yo16 = 0;
+
+    if (size_x > 1 || size_y > 1) {
+      xo16 = xo;
+      yo16 = yo;
+    }
+
+    // Todo: Add character clipping here
+
+    // NOTE: THERE IS NO 'BACKGROUND' COLOR OPTION ON CUSTOM FONTS.
+    // THIS IS ON PURPOSE AND BY DESIGN.  The background color feature
+    // has typically been used with the 'classic' font to overwrite old
+    // screen contents with new data.  This ONLY works because the
+    // characters are a uniform size; it's not a sensible thing to do with
+    // proportionally-spaced fonts with glyphs of varying sizes (and that
+    // may overlap).  To replace previously-drawn text when using a custom
+    // font, use the getTextBounds() function to determine the smallest
+    // rectangle encompassing a string, erase the area with fillRect(),
+    // then draw new text.  This WILL infortunately 'blink' the text, but
+    // is unavoidable.  Drawing 'background' pixels will NOT fix this,
+    // only creates a new set of problems.  Have an idea to work around
+    // this (a canvas object type for MCUs that can afford the RAM and
+    // displays supporting setAddrWindow() and pushColors()), but haven't
+    // implemented this yet.
+
+    startWrite();
+    for (yy = 0; yy < h; yy++) {
+      for (xx = 0; xx < w; xx++) {
+        if (!(bit++ & 7)) {
+          bits = pgm_read_byte(&bitmap[bo++]);
+        }
+        if (bits & 0x80) {
+          if (size_x == 1 && size_y == 1) {
+            writePixel(x + xo + xx, y + yo + yy, color);
+          } else {
+            writeFillRect(x + (xo16 + xx) * size_x, y + (yo16 + yy) * size_y,
+                          size_x, size_y, color);
+          }
+        }
+        bits <<= 1;
+      }
+    }
+    endWrite();
+
+} // End classic vs custom font
+
+From here the only inerested part is the classic font.
+
+--------------------------------------------------------------------------------------------------------------
+Day 7
+--------------------------------------------------------------------------------------------------------------
+
+Going back to the scope of the project. Only text needs to be shown.
+Black / White / Red.
+So the main functions are draw_char_line, draw_char, draw_pixel.
+Taking in 2 framebuffers, one for B/W and one for Red.
+
+By default width is smaller than the height.
+It is better to rotate the display.
+
+In the Arduino example a switch statement is used to rotate.
+Depending on the rotation it swaps the height and width used. 
+
+void Adafruit_GFX::setRotation(uint8_t x) {
+  rotation = (x & 3);
+  switch (rotation) {
+  case 0:
+  case 2:
+    _width = WIDTH;
+    _height = HEIGHT;
+    break;
+  case 1:
+  case 3:
+    _width = HEIGHT;
+    _height = WIDTH;
+    break;
+  }
+}
+
+Note: Their are 2 variables for width and height each. _width, WIDTH, _height, and HEIGHT.
+Using the same logic as in Arduino GFX
+Rotate as if the rotation value is set to 1.
+
+int16_t t;
+t = x;
+x = display_width - 1 - y;
+y = t;
+real_width = display_height;
+real_height = display_width;
+
+getting a pointer to the framebuffer bit
+uint8_t *ptr = &frame_buffer[(x / 8) + y * ((display_width + 7) / 8)];
+
+The framebuffer is a 1D array storing a 2D matrix.
+Therefore, every time y increases by 1 a whole x row needs to be added.
+
+For the font, default Arduino font is better, due to how the bits are structured.
+Each character will have 5 bytes, and they are ordered perfectly for ACII.
+Each character is a bitfield of 8x5.
+
+for (int8_t i = 0; i < 5; i++) { 
+  uint8_t line = font[c * 5 + i];
+
+  for (int8_t j = 0; j < 8; j++, line >>= 1) {
+    if (line & 1) {
+      if (size_x == 1 && size_y == 1)
+        draw_pixel(x + i, y + j, color, frame_buffer);
+    } else {
+      if (size_x == 1 && size_y == 1)
+        draw_pixel(x + i, y + j, color ^ 0xff, frame_buffer);
+    }
+  }
+}
+
+By shifting each bit to the right and getting the last bit will show the pixels of the character.
+Only size of 1 is used, so checking for size doesn't matter here.
+
+Note: when showing the buffers on display, always red should go first as empty bits of a character
+will be black but the empty space should be white and it should be done after the red
+using the B/W framebuffer.
+
+color ^ 0xff should be used for empty spaces as the B/W should show 0x00 as the char color and 0xff
+for the white spaces.
+Red is the opposite, showing 0xff, which is desired, will glow red and empty spaces 0x00 will be black.
+
+Success!!!
+
+Now time for a cleanup and commenting before proceeding.
