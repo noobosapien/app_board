@@ -821,3 +821,163 @@ Red is the opposite, showing 0xff, which is desired, will glow red and empty spa
 Success!!!
 
 Now time for a cleanup and commenting before proceeding.
+
+Published the first commit to github in the epd branch.
+
+Time for the drawing board for the pages and FreeRTOS tasks.
+
+--------------------------------------------------------------------------------------------------------------
+Day 8
+--------------------------------------------------------------------------------------------------------------
+
+There will be 8 states in total for the app.
+A simple state machine would be ideal.
+
+All the state changes are as follows:
+
+[Button interrupts disabled]
+INITIALIZING -----> READY (Automatic)
+[Button interrupts enabled]
+READY -----> WIFI_SCANNING (Press next)
+
+[Button interrupts disabled]
+WIFI_SCANNING -----> WIFI_FOUND (Automatic)
+WIFI_SCANNING -----> WIFI_NOT_FOUND (Automatic)
+
+[Button interrupts enabled]
+WIFI_FOUND -----> BLE_SCANNING (Press next)
+WIFI_NOT_FOUND -----> BLE_SCANNING (Press next)
+
+[Button interrupts enabled]
+WIFI_FOUND -----> READY (Press back)
+WIFI_NOT_FOUND -----> READY (Press back)
+
+[Button interrupts disabled]
+BLE_SCANNING -----> BLE_FOUND (Automatic)
+BLE_SCANNING -----> BLE_NOT_FOUND (Automatic)
+
+[Button interrupts enabled]
+BLE_FOUND -----> WIFI_SCANNING (Press back)
+BLE_NOT_FOUND -----> WIFI_SCANNING (Press back)
+
+Here is the bare bones state machine for the app
+
+void run_app_state_machine(){
+    while(1){
+        switch(current_state){
+            case APP_INITIALIZE:
+            // Display initialize screen
+            // Initialize WIFI
+            // Initialize BLE
+            // Change state to READY
+            break;
+
+            case APP_READY:
+            // Display ready screen
+            // Wait until next is pressed
+            // Change state to WIFI_SCANNING
+            break;
+
+            case APP_WIFI_SCANNING:
+            // Display Wifi scanning screen
+            // Scan for Wifi APs 
+            // Change state to WIFI_FOUND/WIFI_NOT_FOUND depending on return value
+            break;
+
+            case APP_WIFI_FOUND:
+            // Display Wifi found screen with the APs
+            // Wait for next/back button press 
+            // Change state to BLE_SCANNING/READY depending on the button press
+            break;
+
+            case APP_WIFI_NOT_FOUND:
+            // Display Wifi not found screen
+            // Wait for next/back button press 
+            // Change state to BLE_SCANNING/READY depending on the button press
+            break;
+        
+            case APP_BLE_SCANNING:
+            // Display BLE scanning screen
+            // Scan for BLE devices 
+            // Change state to BLE_FOUND/BLE_NOT_FOUND depending on return value
+            break;
+
+            case APP_BLE_FOUND:
+            // Display BLE found screen with the devices
+            // Wait for back button press 
+            // Change state to WIFI_SCANNING if back is pressed
+            break;
+        
+            case APP_BLE_NOT_FOUND:
+            // Display BLE not found screen with the devices
+            // Wait for back button press 
+            // Change state to WIFI_SCANNING if back is pressed
+            break;
+
+            default:
+            // Wrong state change back to initializing
+            current_state = APP_INITIALIZE;
+            break;
+        }
+    }  
+}
+
+It is better to create a state machine for the EPD as well.
+
+The states for the EPD can be divided into these:
+typedef enum {
+    EPD_INIT,
+    EPD_INIT_SPI,
+    EPD_INIT_CONFIG,
+    EPD_INIT_POWER_ON,
+    EPD_READY,
+    EPD_SEND_FRAMES,
+    EPD_WAIT_FRAME
+} EPD_STATE;
+
+The EPD_READY state will wait for a FreeRTOS queue to recieve to proceed.
+
+It turns out every page change will have a full refresh with flickering.
+It needs a custom LUT for partial refresh.
+After trying many configs for 0x22 command it still does the full refresh.
+Maybe because 0x24 and 0x26 send the complete framebuffers.
+
+Looking into the Arduino GFX
+
+  int16_t wb = (w + 7) / 8; // width bytes, bitmaps are padded
+  x -= x % 8; // byte boundary
+  w = wb * 8; // byte boundary
+  int16_t x1 = x < 0 ? 0 : x; // limit
+  int16_t y1 = y < 0 ? 0 : y; // limit
+  int16_t w1 = x + w < int16_t(WIDTH) ? w : int16_t(WIDTH) - x; // limit
+  int16_t h1 = y + h < int16_t(HEIGHT) ? h : int16_t(HEIGHT) - y; // limit
+  int16_t dx = x1 - x;
+  int16_t dy = y1 - y;
+  w1 -= dx;
+  h1 -= dy;
+  if ((w1 <= 0) || (h1 <= 0)) return;
+  _Init_Part();
+  _setPartialRamArea(x1, y1, w1, h1);
+  _writeCommand(0x24);
+
+One problem faced here is that ESP32 SPI transactions should be writen manually
+but in the board, it writes transactions using the API by sending the command.
+
+Maybe sending the command NOP with data individually will work?
+If not the epd_cmd function should be changed.
+If 0x00 is the command just send data.
+
+Okay... so this panel does not support partial updates.
+After digging in further to the Arduino source there is a comment
+
+  public:
+    // attributes
+    static const uint16_t WIDTH = 128;
+    static const uint16_t WIDTH_VISIBLE = 122;
+    static const uint16_t HEIGHT = 250;
+    static const GxEPD2::Panel panel = GxEPD2::GDEY0213Z98;
+    static const bool hasColor = true;
+    static const bool hasPartialUpdate = true; // but refresh is full screen
+
+The paritial update for this panel will always do a full refresh.
+Not the behaviour I wanted, but will work with it.
