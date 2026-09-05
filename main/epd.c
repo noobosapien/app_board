@@ -1,13 +1,5 @@
-#include <stdio.h>
+#include "app_pch.h"
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <driver/spi_master.h>
-#include <driver/gpio.h>
-#include <esp_log.h>
-
-#include "app_board.h"
-#include "epd.h"
 
 static spi_device_handle_t spi_device;
 
@@ -34,10 +26,10 @@ DRAM_ATTR static const epd_init_cmd_t init_cmds[] = {
     {0x21, {0x00, 0x80}, 2} // Display update control / Normal / Source from S0 - S175
 };
 
-DRAM_ATTR static const epd_init_cmd_t power_on_cmds1[] = {
-    {0x22, {0xf7}, 1}, // Display update control 2 / Enable clock signal
-    {0x20, {}, 0}, // Master activation / Activate display update sequence
-};
+// DRAM_ATTR static const epd_init_cmd_t power_on_cmds1[] = {
+//     {0x22, {0xf7}, 1}, // Display update control 2 / Enable clock signal
+//     {0x20, {}, 0}, // Master activation / Activate display update sequence
+// };
 
 DRAM_ATTR static const epd_init_cmd_t update_full_cmds[] = {
     {0x22, {0xf7}, 1}, // Display update control 2 / Enable clock signal
@@ -220,8 +212,38 @@ static void set_partial_ram_area(uint16_t x, uint16_t y, uint16_t width, uint16_
     epd_cmd(temp.cmd, temp.data, temp.databytes);
 }
 
-void epd_state_machine(){
-    while(1){
+extern EventGroupHandle_t app_events;
+extern QueueHandle_t app_event_queue;
+extern TaskHandle_t epd_task;
+extern TaskHandle_t app_task;
+extern TaskHandle_t wifi_task;
+extern TaskHandle_t ble_task;
+
+static BaseType_t n_success;
+static FSM_Event current_notification;
+static uint32_t value = 0;
+
+void epd_acquire_and_draw(write_line* all_lines, uint16_t len){
+    xEventGroupWaitBits( app_events, 1 << EPD_INITIALIZED,
+            pdFALSE, pdTRUE, portMAX_DELAY );
+
+    xEventGroupClearBits(app_events, 1 << EPD_INITIALIZED);
+    
+    memset(frame_buffer, 0xff, buffer_size);
+    memset(frame_buffer_red, 0x00, buffer_size);
+
+    for(int i = 0; i < len; i++){
+        draw_char_line(all_lines[i].x, all_lines[i].y, all_lines[i].text, all_lines[i].len, all_lines[i].color, all_lines[i].frame_buffer);
+    }
+
+    xTaskNotify(epd_task, (uint32_t)EVENT_EPD_DRAW, eSetValueWithOverwrite);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    // xEventGroupWaitBits( app_events, 1 << EPD_INITIALIZED,
+    //         pdFALSE, pdTRUE, portMAX_DELAY );
+}
+
+void epd_state_machine() {
+    while(1) {
         switch(current_state){
             case EPD_INIT:
                 epd_init_gpios();  // Initialize the other GPIOs
@@ -247,17 +269,10 @@ void epd_state_machine(){
                     // ERROR
                     return;
                 }
-                
-                current_state = EPD_INIT_SPI;
-                break;
 
-            case EPD_INIT_SPI:
                 epd_configure_spi();
                 vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
-                current_state = EPD_INIT_CONFIG;
-                break;
 
-            case EPD_INIT_CONFIG:
                 // Hardware reset
                 gpio_set_level(SSD1680_RST, 0);
                 vTaskDelay(50 / portTICK_PERIOD_MS);
@@ -282,42 +297,145 @@ void epd_state_machine(){
                 epd_chkstatus(); // Check whether the EPD is busy
 
                 vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
-                current_state = EPD_INIT_POWER_ON;
-                break;
 
-            case EPD_INIT_POWER_ON:
-                // Power on after a reset
-                for(int i = 0; i < 2; i++){
-                    epd_cmd(power_on_cmds1[i].cmd, power_on_cmds1[i].data, power_on_cmds1[i].databytes);
-                }
-                epd_chkstatus(); // Check whether the EPD is busy
-                vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
                 current_state = EPD_READY;
                 break;
 
             case EPD_READY:
-                // Wait for the queue
-                if(xQueueReceive(fb_queue, &(queue_rx), (TickType_t)portMAX_DELAY) == pdPASS){
-                    current_state = EPD_SEND_FRAMES;
+                xEventGroupSetBits(app_events, 1 << EPD_INITIALIZED);
+
+                n_success = xTaskNotifyWait(0xffffffff, 0xffffffff, &value, portMAX_DELAY);
+
+                if(n_success == pdTRUE){
+
+                    current_notification = (FSM_Event) value;
+                    switch(current_notification){
+                        case EVENT_EPD_DRAW:
+                            current_state = EPD_DRAW;
+                            break;
+                        default:
+                            break;
+                    }
+
+                }else{
+                    // TODO: Error
                 }
                 break;
+            case EPD_DRAW:
+                // xEventGroupClearBits(app_events, 1 << EPD_INITIALIZED);
 
-            case EPD_SEND_FRAMES:
                 epd_cmd(0x26, frame_buffer_red, buffer_size); // Send RED
                 epd_cmd(0x24, frame_buffer, buffer_size); // Send B/W
                 epd_update_partial(); // Send update commands
 
-                current_state = EPD_WAIT_FRAME;
-                break;
-            
-            case EPD_WAIT_FRAME:
                 epd_chkstatus(); // Check whether the EPD is busy
                 current_state = EPD_READY;
                 break;
-
             default:
-                current_state = EPD_INIT;
                 break;
         }
     }
 }
+
+// void epd_state_machine(){
+//     while(1){
+//         switch(current_state){
+//             case EPD_INIT:
+//                 epd_init_gpios();  // Initialize the other GPIOs
+//                 vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
+
+//                 buffer_size = (display_height * display_width) / 8; // Bit packed: Each pixel is 1 bit
+    
+//                 // Need 2 frame buffers, 1 for B/W and the other for Red
+//                 frame_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+//                 frame_buffer_red = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+
+//                 if (frame_buffer == NULL || frame_buffer_red == NULL) {
+//                     ESP_LOGE("EPD", "Failed to allocate memory for frame buffer!");
+//                     return;
+//                 }
+                    
+//                 memset(frame_buffer, 0xff, buffer_size);
+//                 memset(frame_buffer_red, 0x00, buffer_size);
+
+//                 fb_queue = xQueueCreate(4, sizeof(uint8_t)); // Create a queue to ready the framebuffer transfer
+
+//                 if(fb_queue == 0){
+//                     // ERROR
+//                     return;
+//                 }
+                
+//                 current_state = EPD_INIT_SPI;
+//                 break;
+
+//             case EPD_INIT_SPI:
+//                 epd_configure_spi();
+//                 vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
+//                 current_state = EPD_INIT_CONFIG;
+//                 break;
+
+//             case EPD_INIT_CONFIG:
+//                 // Hardware reset
+//                 gpio_set_level(SSD1680_RST, 0);
+//                 vTaskDelay(50 / portTICK_PERIOD_MS);
+//                 gpio_set_level(SSD1680_RST, 1); 
+//                 vTaskDelay(60 / portTICK_PERIOD_MS);
+
+//                 //Software reset
+//                 epd_cmd(init_cmds[0].cmd, init_cmds[0].data, init_cmds[0].databytes);
+//                 vTaskDelay(10 / portTICK_PERIOD_MS); // 10ms from the logic analyzer
+//                 for(int i = 1; i < 6; i++){
+//                     // Send all the config bytes
+//                     epd_cmd(init_cmds[i].cmd, init_cmds[i].data, init_cmds[i].databytes);
+//                 }
+
+//                 epd_chkstatus(); // Check whether the EPD is busy
+
+//                 // Set the SSD1680 RAM for the framebuffer
+//                 set_partial_ram_area(0, 0, display_width, display_height);
+//                 epd_cmd(0x26, frame_buffer_red, buffer_size); // Send RED
+//                 epd_cmd(0x24, frame_buffer, buffer_size); // Send B/W
+                
+//                 epd_chkstatus(); // Check whether the EPD is busy
+
+//                 vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
+//                 current_state = EPD_INIT_POWER_ON;
+//                 break;
+
+//             case EPD_INIT_POWER_ON:
+//                 // Power on after a reset
+//                 // for(int i = 0; i < 2; i++){
+//                 //     epd_cmd(power_on_cmds1[i].cmd, power_on_cmds1[i].data, power_on_cmds1[i].databytes);
+//                 // }
+//                 // epd_chkstatus(); // Check whether the EPD is busy
+//                 // vTaskDelay(5 / portTICK_PERIOD_MS); // WTD
+//                 current_state = EPD_READY;
+//                 break;
+
+//             case EPD_READY:
+//                 // Wait for the queue
+//                 if(xQueueReceive(fb_queue, &(queue_rx), (TickType_t)portMAX_DELAY) == pdPASS){
+//                     epd_chkstatus(); // Check whether the EPD is busy
+//                     current_state = EPD_SEND_FRAMES;
+//                 }
+//                 break;
+
+//             case EPD_SEND_FRAMES:
+//                 epd_cmd(0x26, frame_buffer_red, buffer_size); // Send RED
+//                 epd_cmd(0x24, frame_buffer, buffer_size); // Send B/W
+//                 epd_update_partial(); // Send update commands
+
+//                 current_state = EPD_WAIT_FRAME;
+//                 break;
+            
+//             case EPD_WAIT_FRAME:
+//                 epd_chkstatus(); // Check whether the EPD is busy
+//                 current_state = EPD_READY;
+//                 break;
+
+//             default:
+//                 current_state = EPD_INIT;
+//                 break;
+//         }
+//     }
+// }

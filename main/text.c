@@ -1,6 +1,4 @@
-#include <stdlib.h>
-#include "text.h"
-#include "font.h"
+#include "app_pch.h"
 
 extern const int display_height;
 extern const int display_width;

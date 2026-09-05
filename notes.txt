@@ -981,3 +981,13 @@ After digging in further to the Arduino source there is a comment
 
 The paritial update for this panel will always do a full refresh.
 Not the behaviour I wanted, but will work with it.
+
+--------------------------------------------------------------------------------------------------------------
+Day 9
+--------------------------------------------------------------------------------------------------------------
+
+Creating the Wifi screen.
+
+It is better to redesign the entire system to have 4 FSMs 
+One for each of App, EPD, Wifi and Bluetooth.
+They will communicate through queues, task notifications and events.

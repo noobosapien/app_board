@@ -13,16 +13,32 @@
 #define U_CMD ((void*)0)
 #define U_DATA ((void*)1)
 
+// typedef enum {
+//     EPD_INIT,
+//     EPD_INIT_SPI,
+//     EPD_INIT_CONFIG,
+//     EPD_INIT_POWER_ON,
+//     EPD_READY,
+//     EPD_SEND_FRAMES,
+//     EPD_WAIT_FRAME
+// } EPD_STATE;
+
 typedef enum {
     EPD_INIT,
-    EPD_INIT_SPI,
-    EPD_INIT_CONFIG,
-    EPD_INIT_POWER_ON,
     EPD_READY,
-    EPD_SEND_FRAMES,
-    EPD_WAIT_FRAME
+    EPD_DRAW,
 } EPD_STATE;
 
+typedef struct {
+    int16_t x;
+    int16_t y;
+    char text[25]; 
+    uint16_t len;
+    uint16_t color; 
+    uint8_t *frame_buffer;
+} write_line;
+
 void epd_state_machine();
+void epd_acquire_and_draw(write_line* all_lines, uint16_t len);
 
 #endif
