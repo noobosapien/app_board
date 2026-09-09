@@ -121,7 +121,6 @@ void wifi_state_machine(){
                 sta_netif = esp_netif_create_default_wifi_sta();
                 assert(sta_netif);
 
-
                 wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
                 ESP_ERROR_CHECK(esp_wifi_init(&cfg));
                 
@@ -167,21 +166,7 @@ void wifi_state_machine(){
                 break;
             
             case WIFI_SCAN:
-                // xSemaphoreTake(epd_mutex, portMAX_DELAY ); // Indefinite time not recommended
-
-                // memset(frame_buffer, 0xff, buffer_size);
-                // memset(frame_buffer_red, 0x00, buffer_size);
-                // draw_char_line(0, 10, "Wifi Scanner", 12, 0x00, frame_buffer);
-                // draw_char_line(0, 80, "Scanning For Wifi...", 20, 0xff, frame_buffer_red);
-
-                // xTaskNotify(epd_task, (uint32_t)EVENT_EPD_DRAW, eSetValueWithOverwrite);
-                // vTaskDelay(10 / portTICK_PERIOD_MS);
-                // xEventGroupWaitBits( app_events, 1 << EPD_INITIALIZED,
-                //       pdFALSE, pdTRUE, portMAX_DELAY );
-                // xSemaphoreGive(epd_mutex);
                 render_wifi_scan();
-
-                // epd_acquire_and_draw(NULL, 0);
 
                 wifi_scan();
 
@@ -200,28 +185,6 @@ void wifi_state_machine(){
                 break;
             
             case WIFI_AVAILABLE:
-                // xSemaphoreTake(epd_mutex, portMAX_DELAY ); // Indefinite time not recommended
-
-                // memset(frame_buffer, 0xff, buffer_size);
-                // memset(frame_buffer_red, 0x00, buffer_size);
-                // draw_char_line(0, 10, "Wifi Scanner", 12, 0x00, frame_buffer);
-                // draw_char_line(0, 30, "-------------------------", 25, 0x00, frame_buffer);
-                // draw_char_line(0, 40, "Name             Strength", 25, 0xff, frame_buffer_red);
-                // draw_char_line(0, 50, "-------------------------", 25, 0x00, frame_buffer);
-                // for(int i = 0; i < number; i++){
-                //     strncpy(ssid, (const char*)ap_info[i].ssid, sizeof(ssid) - 1);
-                //     ssid[sizeof(ssid)-1] = '\0';
-                //     draw_char_line(0, 60 + i*10, ssid, 12, 0xff, frame_buffer_red);
-                // }
-                // draw_char_line(176, 120, "<< >>", 5, 0x00, frame_buffer);
-
-                // xTaskNotify(epd_task, (uint32_t)EVENT_EPD_DRAW, eSetValueWithOverwrite);
-                // vTaskDelay(10 / portTICK_PERIOD_MS);
-                // xEventGroupWaitBits( app_events, 1 << EPD_INITIALIZED,
-                //       pdFALSE, pdTRUE, portMAX_DELAY );
-                // xSemaphoreGive(epd_mutex);
-
-                // epd_acquire_and_draw(NULL, 0);
                 render_wifi_available();
 
                 xTaskNotify(app_task, (uint32_t)FSM_DONE, eSetValueWithOverwrite);
@@ -230,22 +193,6 @@ void wifi_state_machine(){
                 break;
             
             case WIFI_NOT_AVAILABLE:
-
-                // xSemaphoreTake(epd_mutex, portMAX_DELAY ); // Indefinite time not recommended
-
-                // memset(frame_buffer, 0xff, buffer_size);
-                // memset(frame_buffer_red, 0x00, buffer_size);
-                // draw_char_line(0, 10, "Wifi Scanner", 12, 0x00, frame_buffer);
-                // draw_char_line(0, 80, "No Wifi Devices Found", 21, 0xff, frame_buffer_red);
-                // draw_char_line(176, 120, "<< >>", 5, 0x00, frame_buffer);
-
-                // xTaskNotify(epd_task, (uint32_t)EVENT_EPD_DRAW, eSetValueWithOverwrite);
-                // vTaskDelay(10 / portTICK_PERIOD_MS);
-                // xEventGroupWaitBits( app_events, 1 << EPD_INITIALIZED,
-                //       pdFALSE, pdTRUE, portMAX_DELAY );
-                // xSemaphoreGive(epd_mutex);
-
-                // epd_acquire_and_draw(NULL, 0);
                 render_wifi_not_available();
 
                 xTaskNotify(app_task, (uint32_t)FSM_DONE, eSetValueWithOverwrite);

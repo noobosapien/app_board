@@ -59,13 +59,18 @@ void app_main(void)
     }
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
-    // event_rx.fsm = SPLASH;
-    // event_rx.event = EVENT_SPLASH_DRAW;
-    // xQueueSend(app_event_queue, &event_rx, (TickType_t)portMAX_DELAY);    
+    event_rx.fsm = SPLASH;
+    event_rx.event = EVENT_SPLASH_DRAW;
+    xQueueSend(app_event_queue, &event_rx, (TickType_t)portMAX_DELAY);    
 
-    // vTaskDelay(50000 / portTICK_PERIOD_MS);
+    vTaskDelay(50000 / portTICK_PERIOD_MS);
     event_rx.fsm = WIFI;
     event_rx.event = EVENT_WIFI_SCAN;
+    xQueueSend(app_event_queue, &event_rx, (TickType_t)portMAX_DELAY);   
+
+    vTaskDelay(50000 / portTICK_PERIOD_MS);
+    event_rx.fsm = BLE;
+    event_rx.event = EVENT_BLE_SCAN;
     xQueueSend(app_event_queue, &event_rx, (TickType_t)portMAX_DELAY);   
     
 }

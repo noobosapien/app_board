@@ -991,3 +991,63 @@ Creating the Wifi screen.
 It is better to redesign the entire system to have 4 FSMs 
 One for each of App, EPD, Wifi and Bluetooth.
 They will communicate through queues, task notifications and events.
+
+
+--------------------------------------------------------------------------------------------------------------
+Day 10
+--------------------------------------------------------------------------------------------------------------
+
+Creating the Bluetooth state machine.
+
+Bluetooth is scanning is totally different from how Wifi scanning works.
+Looking at the esp32 example of the nimble stack.
+https://github.com/espressif/esp-idf/blob/v6.1/examples/bluetooth/ble_get_started/nimble/NimBLE_Beacon/main/main.c
+
+As said in the docs, NVS flash, NimBLE stack and GAP service is first initialized.
+After the NimBLE host stack synchronize with the Bluetooth controller, Bluetooth address
+is confirmed.
+
+Then initiate an undirected, non-connectable, and scannable advertisment.
+
+The sequence is:
+
+NVS init -> Nimble port init -> Gap init -> Nimble host config init
+-> In task call nimble_port_run() -> Delete the current task.
+
+After NimBLE host stack synchronize the Bluetooth controller, a synchronization 
+completion event will be triggered. It will call the ble_hs_cfg.sync_cb callback function.
+
+In the callback, call the adv_init function to initialize advertising operations.
+In adv_init call ble_hs_util_ensure_addr API to confirm that a usable address is available.
+Call ble_hs_id_infer_auto API to obtain the optimal Bluetooth address type.
+
+static void on_stack_sync(void) {
+  /* On stack sync, do advertising initialization */
+  adv_init();
+}
+void adv_init(void) {
+  ...
+  /* Make sure we have proper BT identity address set */
+  rc = ble_hs_util_ensure_addr(0);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "device does not have any available bt address!");
+    return;
+  }
+  /* Figure out BT address to use while advertising */
+  rc = ble_hs_id_infer_auto(0, &own_addr_type);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "failed to infer address type, error code: %d", rc);
+    return;
+  }
+  ...
+}
+
+Next copy the Bluetooth address from the NimBLE stack memory space to 
+addr_val array.
+
+Finally the start_advertising function is called to start advertising.
+In the start_advertising function, first the advertising data structures are populated.
+Advertising flags, complete device name, transmission power level, device apperance, and
+LE role.
+
+Call ble_gap_adv_set_fields API to finalize the setup.
